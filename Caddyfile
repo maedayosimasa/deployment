@@ -1,0 +1,37 @@
+# compose.proxy.yaml の caddy サービスが読み込むリバースプロキシ設定。
+# {$VAR} は Caddy 自身の環境変数展開(docker-compose の ${VAR} とは別物)。
+# DOMAIN/CADDY_EMAIL/CADDY_BASIC_AUTH_* は compose.proxy.yaml が .env から
+# caddy コンテナの環境変数として渡す。
+#
+# basic_authをfrontend・api両方のサイトブロックにかけている理由:
+# backend(main.py)側にアプリケーション認証が一切無く、/archicad/elements/move
+# 等の書き込み系エンドポイントや/agent/chat(Anthropic API課金が発生)を
+# 誰でも直接叩けてしまうため。frontend側だけに認証をかけてもapi.{$DOMAIN}へ
+# 直接アクセスされれば素通りしてしまうので、両方に同じ資格情報でかける。
+# ブラウザは初回アクセス時にオリジンごとに1回ずつ(frontend用・api用で計2回)
+# ネイティブのBasic認証ダイアログを出す(別オリジンのため資格情報はオリジン単位で
+# キャッシュされる、フロントエンドがログインフォームを持つわけではない)。
+
+{
+	email {$CADDY_EMAIL}
+}
+
+# フロントエンド(Vite dev server, frontendコンテナの5173番)。
+# www有り/無し両方を同じオリジンとして扱う。
+{$DOMAIN}, www.{$DOMAIN} {
+	basic_auth {
+		{$CADDY_BASIC_AUTH_USER} {$CADDY_BASIC_AUTH_HASH}
+	}
+	reverse_proxy frontend:5173
+}
+
+# backend API。tailscaleコンテナ名を指すのは、backendが
+# network_mode: service:tailscale でtailscaleとネットワーク名前空間を
+# 共有しており、8000番ポートはtailscaleコンテナの識別で共有ネットワーク
+# (shared-bim-legal-net)に見えるため(compose.yamlのコメント参照)。
+api.{$DOMAIN} {
+	basic_auth {
+		{$CADDY_BASIC_AUTH_USER} {$CADDY_BASIC_AUTH_HASH}
+	}
+	reverse_proxy tailscale:8000
+}

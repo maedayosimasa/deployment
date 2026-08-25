@@ -1,0 +1,56 @@
+# bim-aiagent01とLegal Knowledge Builderを1台のホスト(EC2等)上で連携起動する
+# ための土台ファイル。それぞれの docker-compose.yml は include: で取り込むのみで、
+# サービス定義そのものはコピーしない(各リポジトリ側の docker-compose.yml が
+# 引き続き唯一の正、このファイルは「繋ぐ」ためだけの薄い接着層)。
+#
+# なぜ `-f a.yml -f b.yml` の連結ではなく include: を使うか:
+# 複数の-fファイルを渡す従来方式は、全ファイル中の相対パス(bind mount・build
+# コンテキスト)が「最初に指定したファイルのディレクトリ」基準で解決されるため、
+# 2つの別リポジトリを跨ぐ本構成では意図しないパスになる(例:
+# bim-aiagent01/docker-compose.yml の `./chroma/data` が deployment/ 基準に
+# なってしまう)。include: は各ファイルの相対パスをそのファイル自身の
+# ディレクトリ基準で解決するため、この問題が起きない。
+# (要 Docker Compose v2.20.0 以降。古い場合はDocker公式aptリポジトリから
+# 最新のDocker Engine/Compose pluginを入れること)
+#
+# 前提となるディレクトリ配置(このファイルと同じ階層に2リポジトリを置く):
+#   <parent>/bim-aiagent01/
+#   <parent>/legal-knowledge-builder/   (.envのLKB_DIRで別名も指定可、後述)
+#   <parent>/deployment/                (このディレクトリ)
+#
+# 実行方法(このディレクトリで):
+#   docker compose up -d                          # ローカル動作確認用(このファイルのみ)
+#   docker compose -f compose.yaml -f compose.prod.yaml up -d   # 本番相当(推奨)
+# .envに `COMPOSE_FILE=compose.yaml:compose.prod.yaml` を設定しておけば
+# 後者を `docker compose up -d` だけで実行できる。
+
+include:
+  - ../bim-aiagent01/docker-compose.yml
+  - ${LKB_DIR:-../legal-knowledge-builder}/docker-compose.yml
+
+services:
+  # backendはbim-aiagent01/docker-compose.yml側で
+  # `network_mode: service:tailscale` を使っており、tailscaleコンテナの
+  # ネットワーク名前空間をまるごと共有している(自分自身の`networks:`は
+  # 持てない、Composeの仕様上network_modeと同時指定不可)。tailscale自体は
+  # network_modeを持たないため、下記の共有ネットワーク(project全体の
+  # default network)へ自動的に参加する——backendはそれを間借りする形で
+  # legal-knowledge-builderサービスへコンテナ名で到達できるようになる。
+  #
+  # http://127.0.0.1:8100 ではなく http://legal-knowledge-builder:8100 を
+  # 指定するのは、bim-aiagent01/docker-compose.yml のコメントにある通り
+  # backendがtailscaleのネットワーク名前空間を共有しておりlocalhostが
+  # 自分自身を指してしまうため(WSLでのARCHICAD_MCP_URLゲートウェイ問題と同種)。
+  # ここでコンテナ名解決に切り替えることで、ゲートウェイIPの指定が不要になる。
+  backend:
+    environment:
+      - LEGAL_API_URL=http://legal-knowledge-builder:8100
+
+networks:
+  # プロジェクト全体(bim-aiagent01 + legal-knowledge-builder)で暗黙のうちに
+  # 使われる"default"ネットワークに明示的な名前を与えるだけで、
+  # 両リポジトリの(network_mode指定の無い)全サービスが自動的に同じ
+  # ネットワークに参加し、コンテナ名で相互に名前解決できるようになる。
+  # 各リポジトリ側のdocker-compose.ymlは変更不要。
+  default:
+    name: shared-bim-legal-net

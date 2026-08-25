@@ -1,0 +1,34 @@
+# compose.yaml に対する本番(EC2)向けの上書き。
+# ここに入れるのは「EC2の実ドメインでなければ意味を持たない値」と
+# 「常時稼働の信頼性設定」のみ。両リポジトリを繋ぐための配線(共有ネットワーク・
+# LEGAL_API_URL)はローカルでの動作確認でも必要なため compose.yaml 側に置いている。
+#
+# 現時点では「開発環境のまま」という前提(ユーザー確認済み)のため、
+# 各サービスのDockerfile自体(ホットリロード・vite開発サーバー)や
+# bind mountによるソースディレクトリの共有はあえて変更していない。
+# 本格的な本番ハードニング(マルチステージビルド・読み取り専用ソース等)は
+# 別途の課題として扱う。
+
+services:
+  backend:
+    environment:
+      # フロントエンドの実際の配信元オリジン。未設定のままだと
+      # main.pyのCORS既定値(http://localhost:5173)のみが許可され、
+      # EC2上のフロントエンドからのAPI呼び出しが全てCORSエラーになる。
+      - CORS_ALLOWED_ORIGINS=${FRONTEND_ORIGIN}
+    restart: unless-stopped
+
+  frontend:
+    environment:
+      # ブラウザから見たbackendの公開URL(frontend/src/api/client.ts参照)。
+      # ブラウザ側で評価される値のため、コンテナ名(backend/legal-knowledge-
+      # builder間で使っているようなDocker内部DNS)では届かない。EC2の実際の
+      # ドメイン/IPを指定すること(例: https://bim.example.com:8000)。
+      - VITE_API_BASE_URL=${BACKEND_PUBLIC_URL}
+    restart: unless-stopped
+
+  chromadb:
+    restart: unless-stopped
+
+  # legal-knowledge-builderは同リポジトリのdocker-compose.yml側で
+  # 既にrestart: unless-stoppedを設定済みのためここでの上書きは不要。

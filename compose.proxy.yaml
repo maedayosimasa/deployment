@@ -1,0 +1,40 @@
+# 実ドメイン(例: bim-aiagent.com)でのHTTPS公開用オーバーレイ。
+# Caddyをリバースプロキシとして1台立て、80/443のみを外部公開する。
+# 自動でLet's Encrypt証明書を取得・更新する(HTTP-01チャレンジのため、
+# 起動前にDNSのAレコードがこのホストのグローバルIPを指している必要がある)。
+#
+# 実行方法(deployment/で):
+#   docker compose -f compose.yaml -f compose.prod.yaml -f compose.proxy.yaml up -d --build
+# .envの COMPOSE_FILE に compose.proxy.yaml を追記しておけば
+# `docker compose up -d --build` だけでよい。
+#
+# frontend/backendのポート(5173/8000、legal-knowledge-builderの8100)は
+# 各リポジトリのdocker-compose.ymlが定義したまま(このファイルでは変更
+# しない)だが、Caddyはコンテナ名で到達するためホスト公開している必要は
+# 無い。EC2のセキュリティグループ側で22/80/443のみを開け、5173/8000/8100は
+# 外部に公開しないこと(コンテナ間通信はshared-bim-legal-netで完結する)。
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: bim_caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN}
+      - CADDY_EMAIL=${CADDY_EMAIL}
+      - CADDY_BASIC_AUTH_USER=${CADDY_BASIC_AUTH_USER}
+      - CADDY_BASIC_AUTH_HASH=${CADDY_BASIC_AUTH_HASH}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - backend
+
+volumes:
+  caddy_data:
+  caddy_config:
