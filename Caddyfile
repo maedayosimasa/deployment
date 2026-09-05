@@ -3,35 +3,40 @@
 # DOMAIN/CADDY_EMAIL/CADDY_BASIC_AUTH_* は compose.proxy.yaml が .env から
 # caddy コンテナの環境変数として渡す。
 #
-# basic_authをfrontend・api両方のサイトブロックにかけている理由:
-# backend(main.py)側にアプリケーション認証が一切無く、/archicad/elements/move
-# 等の書き込み系エンドポイントや/agent/chat(Anthropic API課金が発生)を
-# 誰でも直接叩けてしまうため。frontend側だけに認証をかけてもapi.{$DOMAIN}へ
-# 直接アクセスされれば素通りしてしまうので、両方に同じ資格情報でかける。
-# ブラウザは初回アクセス時にオリジンごとに1回ずつ(frontend用・api用で計2回)
-# ネイティブのBasic認証ダイアログを出す(別オリジンのため資格情報はオリジン単位で
-# キャッシュされる、フロントエンドがログインフォームを持つわけではない)。
+# frontend/api を api.{$DOMAIN} のような別オリジンに分けていた旧構成では、
+# ブラウザのfetch()がクロスオリジン先(api.{$DOMAIN})のBasic認証情報を
+# 自動送信しない(HTTP認証情報はデフォルトでは同一オリジンのみに送られる)
+# うえ、Content-Type: application/jsonを送るPOST(/agent/chat等)はCORS
+# プリフライト(OPTIONS)が必要になるが、そのOPTIONSリクエスト自体は
+# 資格情報を含まないためbasic_authに弾かれてプリフライトが失敗する
+# ——結果、フロントエンド画面は表示できてもAIチャット等のAPI呼び出しが
+# 全てブラウザ側でブロックされていた(2026-09-05に実機で確認)。
+# そのためAPIをサブドメインではなく同一オリジンの/api配下にパスベースで
+# 統合し、CORS自体を発生させない構成に変更した。basic_authは1回のログイン
+# で画面・APIの両方に効く(Caddyが/api/*のリクエストにも同じ認証を要求する)。
+# frontend/src/api/client.tsのVITE_API_BASE_URL(deployment/.envの
+# BACKEND_PUBLIC_URL)は https://{$DOMAIN}/api を指す想定。
 
 {
 	email {$CADDY_EMAIL}
 }
 
-# フロントエンド(Vite dev server, frontendコンテナの5173番)。
-# www有り/無し両方を同じオリジンとして扱う。
 {$DOMAIN}, www.{$DOMAIN} {
 	basic_auth {
 		{$CADDY_BASIC_AUTH_USER} {$CADDY_BASIC_AUTH_HASH}
 	}
-	reverse_proxy frontend:5173
-}
 
-# backend API。tailscaleコンテナ名を指すのは、backendが
-# network_mode: service:tailscale でtailscaleとネットワーク名前空間を
-# 共有しており、8000番ポートはtailscaleコンテナの識別で共有ネットワーク
-# (shared-bim-legal-net)に見えるため(compose.yamlのコメント参照)。
-api.{$DOMAIN} {
-	basic_auth {
-		{$CADDY_BASIC_AUTH_USER} {$CADDY_BASIC_AUTH_HASH}
+	# backend API(/api/*、パスを剥がしてから転送)。tailscaleコンテナ名を
+	# 指すのは、backendが network_mode: service:tailscale でtailscaleと
+	# ネットワーク名前空間を共有しており、8000番ポートはtailscaleコンテナの
+	# 識別で共有ネットワーク(shared-bim-legal-net)に見えるため
+	# (compose.yamlのコメント参照)。
+	handle_path /api/* {
+		reverse_proxy tailscale:8000
 	}
-	reverse_proxy tailscale:8000
+
+	# それ以外は全てフロントエンド(Vite dev server, frontendコンテナの5173番)。
+	handle {
+		reverse_proxy frontend:5173
+	}
 }
